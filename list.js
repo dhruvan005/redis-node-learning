@@ -29,6 +29,14 @@ async function init() {
   const res4 = await client.rpop('bikes:repairs');
   console.log(res4)  // -> removes the bike:2
 
+
+  const res48 = await client.lPush(
+    'bikes:repairs', ['bike:1', 'bike:2', 'bike:3', 'bike:4', 'bike:5']
+  );
+  console.log(res48);  // 5
+
+  const res49 = await client.lTrim('bikes:repairs', 0, 2);
+  console.log(res49);  // 'OK'
 }
 
 
