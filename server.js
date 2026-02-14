@@ -6,11 +6,15 @@ const app = express();
 
 app.use(express.json());
 
-app.get('/' , async (req , res) => {
+app.get('/api/posts' , async (req , res) => {
+
+  const {q, take, skip, published} = req.query;
+  
+
   const cachedValue = await client.get("todos");
 
   if(cachedValue){
-    // when we retrive the data from the redis the data is the form of the string we have to parce the data to json and then pass to the response 
+    // when we retrive the data from the redis the data is the form of the string we have to parce the data to json and then pass to the response  
     return res.json(JSON.parse(cachedValue))
   }
   const response = await axios.get("https://jsonplaceholder.typicode.com/todos");
