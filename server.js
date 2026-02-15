@@ -1,30 +1,120 @@
 import client from './client.js';
 import express, { response } from 'express';
 import axios from 'axios';
+import prisma from './db.js';
 
 const app = express();
 
 app.use(express.json());
 
-app.get('/api/posts' , async (req , res) => {
+function constructKey(req) {
+  // came as /api/posts
+  const baseUrl = req.path.replace(/^\/+|\/+$/g, '').replace(/\//g, ':');
+  // baseUrl will be api:posts
+  const parems = req.query;
+  // Object.keys , it take only keys from the query like (q, skip, take, etc)
+  const sortedParems = Object.keys(parems)
+    .sort()
+    .map((key) => `${key}=${parems[key]}`)
+    .join("&");
 
-  const {q, take, skip, published} = req.query;
-  
+  return sortedParems ? `${baseUrl}:${sortedParems}` : baseUrl;
+}
 
-  const cachedValue = await client.get("todos");
+app.get('/api/posts', async (req, res) => {
 
-  if(cachedValue){
-    // when we retrive the data from the redis the data is the form of the string we have to parce the data to json and then pass to the response  
-    return res.json(JSON.parse(cachedValue))
+  const { q, take, skip, published } = req.query;
+
+  // check if key exist in cache
+  const KEY = constructKey(req);
+  // requested URL : http://localhost:3000/api/posts?q=Node.js&take=100&skip=0&published=true
+  // constructed Key from that - key :  api:posts:published=true&q=Node.js&skip=0&take=100
+  console.log("key : ", KEY)
+  const data = await client.get(KEY);
+
+  if (data) {
+    console.log("Cache Hit")
+    return res.json(JSON.parse(data))
   }
-  const response = await axios.get("https://jsonplaceholder.typicode.com/todos");
-  // adding the data from the response and convert to string 
-  await client.set("todos" , JSON.stringify(response.data));
-  // in this we can set expire in this key 
-  await client.expire("todos" , 60);
-  return res.json(response.data);
+
+  console.log("Cache Miss")
+
+
+
+  const posts = await prisma.post.findMany({
+    take: Number(take),
+    skip: Number(skip),
+    orderBy: {
+      id: 'desc',
+    },
+    include: {
+      author: {
+        include: {
+          profile: true,
+        },
+      },
+    },
+    where: {
+      published: published ? published === 'true' : undefined,
+      title: q ? {
+        contains: q,
+        mode: 'insensitive',
+      } : undefined,
+    },
+  });
+
+  await client.set(KEY, JSON.stringify(posts), 'EX', 60, 'NX')
+
+  res.json({ posts: posts, total: posts.length })
 })
 
-app.listen(3000 , () => {
+
+// when the new post is created then we delete that data from that cache for maintaining consistency
+
+// Helper function to invalidate all posts cache
+async function invalidatePostsCache() {
+  const keys = await client.keys('api:posts:*');
+  if (keys.length > 0) {
+    await client.del(...keys);
+    console.log(`Invalidated ${keys.length} cache keys`);
+  }
+}
+
+// Helper function to invalidate all posts cache using SCAN (non-blocking, production-safe)
+async function invalidatePostsCacheSCAN() {
+  let cursor = '0';
+  let totalDeleted = 0;
+
+  do {
+    // SCAN is non-blocking - iterates through keys in batches
+    // COUNT 100 means process ~100 keys per iteration (hint, not guarantee)
+    const [newCursor, keys] = await client.scan(cursor, 'MATCH', 'api:posts:*', 'COUNT', 100);
+    cursor = newCursor;
+
+    if (keys.length > 0) {
+      await client.del(...keys);
+      totalDeleted += keys.length;
+    }
+  } while (cursor !== '0'); // cursor returns to '0' when scan is complete
+
+  if (totalDeleted > 0) {
+    console.log(`Invalidated ${totalDeleted} cache keys`);
+  }
+}
+
+app.post('/api/post', async (req, res) => {
+  const { title, content, authorId, published } = req.body;
+
+  const post = await prisma.post.create({
+    data: { title, content, authorId, published }
+  })
+
+  // Invalidate all posts list cache
+  await invalidatePostsCache();
+
+  res.json(post);
+})
+
+app.listen(3000, () => {
   console.log(`Server is runnig on http://localhost:3000/`)
 });
