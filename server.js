@@ -72,6 +72,7 @@ app.get('/api/posts', async (req, res) => {
 // when the new post is created then we delete that data from that cache for maintaining consistency
 
 // Helper function to invalidate all posts cache
+// client.keys return all the matching pattern in redis-db 
 async function invalidatePostsCache() {
   const keys = await client.keys('api:posts:*');
   if (keys.length > 0) {
@@ -81,13 +82,14 @@ async function invalidatePostsCache() {
 }
 
 // Helper function to invalidate all posts cache using SCAN (non-blocking, production-safe)
+// O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection.
 async function invalidatePostsCacheSCAN() {
   let cursor = '0';
   let totalDeleted = 0;
 
   do {
     // SCAN is non-blocking - iterates through keys in batches
-    // COUNT 100 means process ~100 keys per iteration (hint, not guarantee)
+    // COUNT 100 means process ~100 keys per iteration
     const [newCursor, keys] = await client.scan(cursor, 'MATCH', 'api:posts:*', 'COUNT', 100);
     cursor = newCursor;
 
@@ -109,7 +111,7 @@ app.post('/api/post', async (req, res) => {
     data: { title, content, authorId, published }
   })
 
-  // Invalidate all posts list cache
+  // Invalidate all posts from redis
   await invalidatePostsCache();
 
   res.json(post);
